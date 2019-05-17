@@ -9,5 +9,7 @@ setup(name='pbdlib',
       author_email='emmanuel.pignat@idiap.ch',
       license='MIT',
       packages=find_packages(),
-      install_requires = ['numpy','scipy','matplotlib', 'sklearn', 'dtw', 'jupyter', 'enum', 'termcolor'],
+      install_requires = ['numpy','scipy','matplotlib', 'sklearn', 'dtw', 'jupyter', 'termcolor'],
+      # enum was in there, but didn't work in py3
+      #install_requires = ['numpy','scipy','matplotlib', 'sklearn', 'dtw', 'enum','jupyter', 'termcolor'],
       zip_safe=False)
