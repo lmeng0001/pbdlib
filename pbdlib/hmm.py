@@ -496,3 +496,15 @@ class HMM(GMM):
     @Trans.setter
     def Trans(self, value):
         self.trans = value
+
+
+    def predict(self, q):
+        q_dim = len(q)
+        q_dot = np.zeros((q_dim))
+        for i in range(self.nb_states):
+            a = q - self.mu[i][0:q_dim]
+            b = np.linalg.inv(self.sigma[i][0:q_dim , 0:q_dim]) @ a
+            c = self.sigma[i][q_dim:, 0:q_dim] @ b
+            d = self.mu[i][q_dim:] + c
+            q_dot += d
+        return q_dot
