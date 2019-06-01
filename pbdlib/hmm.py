@@ -8,6 +8,7 @@ from pbdlib.gmm import *
 import math
 from numpy.linalg import inv, pinv, norm, det
 import sys
+from collections import defaultdict
 
 
 class HMM(GMM):
@@ -16,6 +17,7 @@ class HMM(GMM):
 
         self._trans = None
         self._init_priors = None
+        self.qs = defaultdict(np.array)
 
     @property
     def init_priors(self):
@@ -498,13 +500,43 @@ class HMM(GMM):
         self.trans = value
 
 
-    def predict(self, q):
+    def predict(self, q, t):
         q_dim = len(q)
         q_dot = np.zeros((q_dim))
         for i in range(self.nb_states):
             a = q - self.mu[i][0:q_dim]
-            b = np.linalg.inv(self.sigma[i][0:q_dim , 0:q_dim]) @ a
+            b = inv(self.sigma[i][0:q_dim , 0:q_dim]) @ a
             c = self.sigma[i][q_dim:, 0:q_dim] @ b
             d = self.mu[i][q_dim:] + c
-            q_dot += d
+            q_dot += self.h(i, q , t) * d
         return q_dot
+
+    def h(self, i, q, t):
+        self.qs[t] = q
+        if t == 0:
+            s = 0
+            for j in range(self.nb_states):
+                s += self._init_priors[j] * self._normal_q(q, j)
+            res = self._init_priors[i] * self._normal_q(q, i)
+            res /= s
+            return res
+        else:
+            num = 0
+            for j in range(self.nb_states):
+                num += self.h(j, q[t-1], t-1) * self.trans[j][i]
+            num *= self._normal_q(q, i)
+            denom = 0
+            for k in range(self.nb_states):
+                inner = 0
+                for j in range(self.nb_states):
+                    inner += self.h(j, q[t-1], t-1) * self.trans[j][k]
+                inner *= self._normal_q(q, k)
+                denom += inner
+            return num / denom
+
+
+    
+    def _normal_q(self, q, i):
+        q_dim = len(q)
+        return multi_variate_normal(q, self.mu[i][0:q_dim], sigma=self.sigma[i][0:q_dim, 0:q_dim], log=False)
+        
