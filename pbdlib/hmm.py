@@ -17,7 +17,8 @@ class HMM(GMM):
 
         self._trans = None
         self._init_priors = None
-        self.qs = defaultdict(np.array)
+        self.qs = {}
+        self.hs = {}
 
     @property
     def init_priors(self):
@@ -500,7 +501,7 @@ class HMM(GMM):
         self.trans = value
 
 
-    def predict(self, q, t):
+    def predict_qdot(self, q, t):
         q_dim = len(q)
         q_dot = np.zeros((q_dim))
         for i in range(self.nb_states):
@@ -511,32 +512,47 @@ class HMM(GMM):
             q_dot += self.h(i, q , t) * d
         return q_dot
 
+
+    def predict_q(self, q_dot, q, t):
+        q_dim = len(q_dot)
+        q_dot = np.zeros((q_dim))
+        for i in range(self.nb_states):
+            a = q_dot - self.mu[i][q_dim:]
+            b = inv(self.sigma[i][q_dim: , q_dim:]) @ a
+            c = self.sigma[i][0:q_dim, q_dim:] @ b
+            d = self.mu[i][:q_dim] + c
+            # maybe q_dot instead of q in h
+            q_new += self.h(i, q , t) * d
+        return q_new
+
     def h(self, i, q, t):
+        if (i, t) in self.hs.keys():
+            return self.hs[i, t]
         self.qs[t] = q
         if t == 0:
             s = 0
             for j in range(self.nb_states):
-                s += self._init_priors[j] * self._normal_q(q, j)
-            res = self._init_priors[i] * self._normal_q(q, i)
+                s += self.priors[j] * self._normal_q(q, j)
+            res = self.priors[i] * self._normal_q(q, i)
             res /= s
-            return res
         else:
             num = 0
             for j in range(self.nb_states):
-                num += self.h(j, q[t-1], t-1) * self.trans[j][i]
+                num += self.h(j, self.qs[t-1], t-1) * self.Trans[j][i]
             num *= self._normal_q(q, i)
             denom = 0
             for k in range(self.nb_states):
                 inner = 0
                 for j in range(self.nb_states):
-                    inner += self.h(j, q[t-1], t-1) * self.trans[j][k]
+                    inner += self.h(j, self.qs[t-1], t-1) * self.Trans[j][k]
                 inner *= self._normal_q(q, k)
                 denom += inner
-            return num / denom
-
-
-    
+            res = num / denom
+        self.hs[i, t] = res
+        return res
+        
     def _normal_q(self, q, i):
         q_dim = len(q)
-        return multi_variate_normal(q, self.mu[i][0:q_dim], sigma=self.sigma[i][0:q_dim, 0:q_dim], log=False)
+        a = multi_variate_normal(q, self.mu[i][0:q_dim], sigma=self.sigma[i][0:q_dim, 0:q_dim])
+        return a
         
