@@ -9,6 +9,7 @@ import math
 from numpy.linalg import inv, pinv, norm, det
 import sys
 from collections import defaultdict
+from scipy.stats import multivariate_normal
 
 
 class HMM(GMM):
@@ -19,6 +20,7 @@ class HMM(GMM):
         self._init_priors = None
         self.qs = {}
         self.hs = {}
+        self._hs = {}
 
     @property
     def init_priors(self):
@@ -509,13 +511,15 @@ class HMM(GMM):
             b = inv(self.sigma[i][0:q_dim , 0:q_dim]) @ a
             c = self.sigma[i][q_dim:, 0:q_dim] @ b
             d = self.mu[i][q_dim:] + c
-            q_dot += self.h(i, q , t) * d
+            h = self.h(i, q, t)
+            print(h)
+            q_dot += h * d
         return q_dot
 
 
     def predict_q(self, q_dot, q, t):
         q_dim = len(q_dot)
-        q_dot = np.zeros((q_dim))
+        q_new = np.zeros((q_dim))
         for i in range(self.nb_states):
             a = q_dot - self.mu[i][q_dim:]
             b = inv(self.sigma[i][q_dim: , q_dim:]) @ a
@@ -530,10 +534,10 @@ class HMM(GMM):
             return self.hs[i, t]
         self.qs[t] = q
         if t == 0:
-            s = 0
-            for j in range(self.nb_states):
-                s += self.priors[j] * self._normal_q(q, j)
             res = self.priors[i] * self._normal_q(q, i)
+            s = 0
+            for k in range(self.nb_states):
+                s += self.priors[k] * self._normal_q(q, k)
             res /= s
         else:
             num = 0
@@ -548,11 +552,22 @@ class HMM(GMM):
                 inner *= self._normal_q(q, k)
                 denom += inner
             res = num / denom
-        self.hs[i, t] = res
+        self._h(i, q, t)
         return res
         
     def _normal_q(self, q, i):
         q_dim = len(q)
-        a = multi_variate_normal(q, self.mu[i][0:q_dim], sigma=self.sigma[i][0:q_dim, 0:q_dim])
+        #a = multivariate_normal.logpdf(q,mean=self.mu[i][:q_dim], cov=self.sigma[i][:q_dim, :q_dim])
+        a = multi_variate_normal(np.array([q]), self.mu[i][0:q_dim], sigma=self.sigma[i][0:q_dim, 0:q_dim], log=True)
+        #norm = 1 / ((2*np.pi)) * np.linalg.det(self.sigma[i][:q_dim, :q_dim])
+        #exp_term = -(1/2)*(q - self.mu[i][:q_dim]).T @ np.linalg.inv(self.sigma[i][:q_dim, :q_dim]) @ (q - self.mu[i][:q_dim])
+        #a = norm * exp_term
         return a
+        
+
+    def _h(self, i , q, t):
+        q_dim=len(q)
+        for j in range(self.nb_states):
+            self._hs[i, t] = self.priors[i] * self._normal_q(np.array([q]))
+        self._hs[:, t] = self._hs[:, t] / sum(self._hs[: , t])
         
