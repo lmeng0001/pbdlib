@@ -188,11 +188,27 @@ class HMM(GMM):
         if not hasattr(self, '_alpha_tmp') or reset:
             self._alpha_tmp = self.init_priors * B[:, 0]
         else:
-            self._alpha_tmp = self._alpha_tmp.dot(self.Trans) * B[:, 0]
-
-        self._alpha_tmp /= np.sum(self._alpha_tmp, keepdims=True)
+            self._alpha_tmp = self._alpha_tmp.dot(self.Trans) * (B[:, 0])
+        if np.count_nonzero(self._alpha_tmp) == 0:
+            print(self._alpha_tmp)
+        self._alpha_tmp /= np.sum(self._alpha_tmp, keepdims=True) 
 
         return self._alpha_tmp
+
+    
+    def marginal_model(self, dims):
+        """
+        Get a GMM of a slice of this GMM
+        :param dims:
+        :type dims: slice
+        :return:
+        """
+        gmm = HMM(nb_dim=dims.stop-dims.start, nb_states=self.nb_states)
+        gmm.priors = self.priors
+        gmm.mu = self.mu[:, dims]
+        gmm.sigma = self.sigma[:, dims, dims]
+
+        return gmm
 
     def compute_messages(self, demo=None, dep=None, table=None, marginal=None, sample_size=200, demo_idx=None):
         """
@@ -506,14 +522,18 @@ class HMM(GMM):
     def predict_qdot(self, q, t):
         q_dim = len(q)
         q_dot = np.zeros((q_dim))
+        reset = False
         for i in range(self.nb_states):
             a = q - self.mu[i][0:q_dim]
             b = inv(self.sigma[i][0:q_dim , 0:q_dim]) @ a
             c = self.sigma[i][q_dim:, 0:q_dim] @ b
             d = self.mu[i][q_dim:] + c
-            h = self.h(i, q, t)
-            print(h)
-            q_dot += h * d
+            #h = self.h(i, q, t)
+            if t == 0:
+                reset = True
+            h = self.online_forward_message(q, marginal=slice(0, 7), reset=reset)
+            self.hs[i, t] = h[i]
+            q_dot += h[i] * d
         return q_dot
 
 
@@ -525,49 +545,75 @@ class HMM(GMM):
             b = inv(self.sigma[i][q_dim: , q_dim:]) @ a
             c = self.sigma[i][0:q_dim, q_dim:] @ b
             d = self.mu[i][:q_dim] + c
+            h = self.hs[i, t]
             # maybe q_dot instead of q in h
-            q_new += self.h(i, q , t) * d
+            q_new += h * d
         return q_new
 
     def h(self, i, q, t):
-        if (i, t) in self.hs.keys():
-            return self.hs[i, t]
+        if (i, t) in self._hs.keys():
+            return self._hs[i, t]
+        return self.h_right(i, q, t)
+        
+    def _normal_q(self, q, i):
+        q_dim = len(q)
+        #a = multivariate_normal.pdf(q,mean=self.mu[i][:q_dim], cov=self.sigma[i][:q_dim, :q_dim])
+        a = multi_variate_normal(np.array([q]), self.mu[i][0:q_dim], sigma=self.sigma[i][0:q_dim, 0:q_dim], log=True)
+        a = np.exp(a)
+        #a = q - self.mu[i][:q_dim]
+        #sigma = self.sigma[i][:q_dim, :q_dim]
+        #änorm = np.sqrt((2*np.pi)**q_dim) * np.abs(np.linalg.det(sigma))
+        #prob = a.T @ sigma @ a
+        #a = (- 0.5 * prob)/ norm 
+        return a + np.finfo(float).tiny
+        
+    def _history(self, q, t):
+        q_dim=len(q)
+        if t == 0:
+            s = 0
+            for i in range(self.nb_states):
+                res = float(self.priors[i] * self._normal_q(q, i))
+                s += res
+                self._hs[i, t] = res
+            for j in range(self.nb_states):
+                self._hs[j, t] = self._hs[j, t] / s
+        else:
+            for i in range(self.nb_states):
+                res = 0
+                for j in range(self.nb_states):
+                    res += self._hs[j, t-1] * self.Trans[j][i]
+                res *= float(self._normal_q(q, i))
+                self._hs[i, t] = res
+            s = 0
+            for k in range(self.nb_states):
+                res = 0
+                for j in range(self.nb_states):
+                    res += self._hs[j, t-1] * self.Trans[j][k]
+                res *= float(self._normal_q(q, k))
+                s += res
+            for i in range(self.nb_states):
+                self._hs[i, t] /= s
+    
+    def h_right(self, i, q, t):
         self.qs[t] = q
         if t == 0:
             res = self.priors[i] * self._normal_q(q, i)
             s = 0
             for k in range(self.nb_states):
-                s += self.priors[k] * self._normal_q(q, k)
+                s += self.priors[k] * self._normal_q(q, i)
             res /= s
         else:
             num = 0
             for j in range(self.nb_states):
-                num += self.h(j, self.qs[t-1], t-1) * self.Trans[j][i]
+                num += self._hs[j, t-1] * self.Trans[i][j]
             num *= self._normal_q(q, i)
             denom = 0
             for k in range(self.nb_states):
-                inner = 0
+                tmp = 0
                 for j in range(self.nb_states):
-                    inner += self.h(j, self.qs[t-1], t-1) * self.Trans[j][k]
-                inner *= self._normal_q(q, k)
-                denom += inner
+                    tmp += self._hs[j, t-1] * self.Trans[k][j]
+                tmp += self._normal_q(q, k)
+                denom += tmp
             res = num / denom
-        self._h(i, q, t)
-        return res
-        
-    def _normal_q(self, q, i):
-        q_dim = len(q)
-        #a = multivariate_normal.logpdf(q,mean=self.mu[i][:q_dim], cov=self.sigma[i][:q_dim, :q_dim])
-        a = multi_variate_normal(np.array([q]), self.mu[i][0:q_dim], sigma=self.sigma[i][0:q_dim, 0:q_dim], log=True)
-        #norm = 1 / ((2*np.pi)) * np.linalg.det(self.sigma[i][:q_dim, :q_dim])
-        #exp_term = -(1/2)*(q - self.mu[i][:q_dim]).T @ np.linalg.inv(self.sigma[i][:q_dim, :q_dim]) @ (q - self.mu[i][:q_dim])
-        #a = norm * exp_term
-        return a
-        
-
-    def _h(self, i , q, t):
-        q_dim=len(q)
-        for j in range(self.nb_states):
-            self._hs[i, t] = self.priors[i] * self._normal_q(np.array([q]))
-        self._hs[:, t] = self._hs[:, t] / sum(self._hs[: , t])
-        
+        self._hs[i, t] = res
+        return res 
